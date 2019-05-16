@@ -1,0 +1,2599 @@
+﻿<html>
+
+<head>
+    <title>Clustering</title>
+    <style>body {
+    font-family:"Verdana";
+    font-size:0.8em;
+}
+.chartcontainer {
+    float:left;
+    background-color:#CCCCCC;
+    padding:1px;
+    margin:2px;
+}</style>
+
+    <script src="http://code.jquery.com/jquery-1.11.0.min.js"></script>
+</head>
+
+<body>
+    <h2>K-means++/MeanShift Clustering</h2>
+    <input type="button" id="btnGo" value="Go"/>
+    <div>
+        <div id="container">
+            <div class="chartcontainer">
+                <span>H/S</span>
+                <br/>
+                <canvas class="chart" width="300" height="300" data-idx1="0" data-idx2="1"></canvas>
+            </div>
+            <div class="chartcontainer">
+                <span>H/L</span>
+                <br/>
+                <canvas class="chart" width="300" height="300" data-idx1="0" data-idx2="2"></canvas>
+            </div>
+            <div class="chartcontainer">
+                <span>S/L</span>
+                <br/>
+                <canvas class="chart" width="300" height="300" data-idx1="1" data-idx2="2"></canvas>
+            </div>
+            <div class="chartcontainer">
+                <span>H</span>
+                <br/>
+                <canvas class="histogram" width="300" height="300" data-idx="0"></canvas>
+            </div>
+            <div class="chartcontainer">
+                <span>S</span>
+                <br/>
+                <canvas class="histogram" width="300" height="300" data-idx="1"></canvas>
+            </div>
+            <div class="chartcontainer">
+                <span>L</span>
+                <br/>
+                <canvas class="histogram" width="300" height="300" data-idx="2"></canvas>
+            </div>
+        </div>
+    </div>
+    <br style="clear:both" />
+    <span id="debug"></span>
+    <br style="clear:both" />
+    <div class="chartcontainer">
+        <span>Output image</span>
+        <br/>
+        <canvas id="outputCanvas"></canvas>
+    </div>
+    <div class="chartcontainer">
+        <span>Input image</span>
+        <br/>
+        <img id="img" crossOrigin="" src="http://i.imgur.com/Zv3inKc.png" />
+    </div>
+    <script>/// <reference path="https://cdn.rawgit.com/borisyankov/DefinitelyTyped/master/jquery/jquery.d.ts" />
+var __extends = (this && this.__extends) || function (d, b) {
+    for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+};
+var img = document.getElementById("img");
+var outputCanvas = document.getElementById("outputCanvas");
+var outputCtx = outputCanvas.getContext("2d");
+var inputImageData;
+var initialData;
+var RGB = (function () {
+    function RGB(r, g, b) {
+        this.r = r;
+        this.g = g;
+        this.b = b;
+    }
+    RGB.prototype.toString = function () { return "rgb(" + Math.floor(this.r) + "," + Math.floor(this.g) + "," + Math.floor(this.b) + ")"; };
+    return RGB;
+}());
+var colors = [
+    new RGB(255, 0, 0),
+    new RGB(0, 255, 0),
+    new RGB(0, 0, 255),
+    new RGB(0, 255, 255),
+    new RGB(255, 255, 0),
+    new RGB(255, 0, 255),
+    new RGB(128, 255, 128),
+    new RGB(128, 128, 255),
+    new RGB(255, 128, 128),
+    new RGB(255, 255, 128),
+    new RGB(255, 128, 255),
+    new RGB(128, 128, 255),
+];
+var GUI = (function () {
+    function GUI() {
+    }
+    GUI.prototype.updateStatus = function (str) {
+        $("#debug").text(str);
+    };
+    GUI.prototype.drawCharts = function (vectors, centroids, clusters) {
+        var charts = $(".chart");
+        for (var c = 0; c < charts.length; c++) {
+            var chart = charts[c];
+            var chartCtx = chart.getContext("2d");
+            var xIdx = parseInt($(chart).attr("data-idx1"));
+            var yIdx = parseInt($(chart).attr("data-idx2"));
+            this.drawChart(chart, chartCtx, vectors, centroids, clusters, xIdx, yIdx);
+        }
+    };
+    GUI.prototype.drawChart = function (chart, chartCtx, vectors, centroids, clusters, xIdx, yIdx) {
+        var chartWidth = chart.width;
+        var chartHeight = chart.height;
+        chartCtx.fillStyle = "white";
+        chartCtx.fillRect(0, 0, chartWidth, chartHeight);
+        var chartData = chartCtx.getImageData(0, 0, chartWidth, chartHeight);
+        var arr = chartData.data;
+        for (var _i = 0, vectors_1 = vectors; _i < vectors_1.length; _i++) {
+            var v = vectors_1[_i];
+            var x = Math.round(v.values[xIdx] * (chartWidth - 1));
+            var y = Math.round((1 - v.values[yIdx]) * (chartHeight - 1));
+            var idx = (y * chartWidth + x) * 4;
+            if (idx >= 0 && idx < arr.length) {
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] = 255;
+            }
+        }
+        for (var k = 0; k < clusters.length; k++) {
+            var color = colors[k % colors.length];
+            for (var _a = 0, _b = clusters[k]; _a < _b.length; _a++) {
+                var v = _b[_a];
+                var x = Math.round(v.values[xIdx] * chartWidth);
+                var y = Math.round((1 - v.values[yIdx]) * chartHeight);
+                var idx = (y * chartWidth + x) * 4;
+                if (idx >= 0 && idx < arr.length) {
+                    arr[idx] = color.r;
+                    idx++;
+                    arr[idx] = color.g;
+                    idx++;
+                    arr[idx] = color.b;
+                    idx++;
+                    arr[idx] = 255;
+                }
+            }
+        }
+        chartCtx.putImageData(chartData, 0, 0);
+        for (var k = 0; k < clusters.length; k++) {
+            var color = colors[k % colors.length];
+            chartCtx.fillStyle = color;
+            var cx = Math.floor(centroids[k].values[xIdx] * chartWidth);
+            var cy = Math.floor((1 - centroids[k].values[yIdx]) * chartHeight);
+            chartCtx.beginPath();
+            chartCtx.arc(cx, cy, 3, 0, 2 * Math.PI, false);
+            chartCtx.fill();
+        }
+    };
+    GUI.prototype.drawHistograms = function (vectors) {
+        var hists = $(".histogram");
+        for (var c = 0; c < hists.length; c++) {
+            var hist = hists[c];
+            var histCtx = hist.getContext("2d");
+            var xIdx = parseInt($(hist).attr("data-idx"));
+            var bins = this.calcHist(vectors, xIdx);
+            this.drawHist(hist, histCtx, bins);
+        }
+    };
+    GUI.prototype.calcHist = function (vectors, attrIdx) {
+        var bins = [];
+        for (var i = 0; i < 256; i++)
+            bins.push(0);
+        var max = 0;
+        for (var _i = 0, vectors_2 = vectors; _i < vectors_2.length; _i++) {
+            var v = vectors_2[_i];
+            var val = Math.round(v.values[attrIdx] * 255);
+            if (val >= 0 && val < 256) {
+                bins[val]++;
+                if (max < bins[val])
+                    max = bins[val];
+            }
+        }
+        for (var i = 0; i < bins.length; i++)
+            bins[i] /= max;
+        return bins;
+    };
+    GUI.prototype.drawHist = function (cHistogram, ctxHistogram, bins) {
+        var histWidth = cHistogram.width;
+        var histHeight = cHistogram.height;
+        ctxHistogram.fillStyle = "white";
+        ctxHistogram.fillRect(0, 0, histWidth, histHeight);
+        ctxHistogram.fillStyle = "black";
+        for (var i = 0; i < bins.length; i++) {
+            var x = i;
+            var y = (1 - bins[i]) * histHeight;
+            ctxHistogram.fillRect(x, y, 1, histHeight - y);
+        }
+    };
+    GUI.prototype.setupFeatureVectorCharts = function (labels) {
+        var container = $("#container");
+        container.empty();
+        for (var i = 0; i < labels.length; i++) {
+            for (var j = i + 1; j < labels.length; j++) {
+                var html = "<div class=\"chartcontainer\">\n                <span>" + labels[i] + " - " + labels[j] + "</span>\n                <br/>\n                <canvas class=\"chart\" width=\"256\" height=\"256\" data-idx1=\"" + i + "\" data-idx2=\"" + j + "\"></canvas>\n            </div>";
+                container.append(html);
+            }
+        }
+        container.append("<br style='clear:both'/>");
+        for (var i = 0; i < labels.length; i++) {
+            var html = "<div class=\"chartcontainer\">\n                <span>Histogram of " + labels[i] + "</span>\n                <br/>\n                <canvas class=\"histogram\" width=\"256\" height=\"256\" data-idx=\"" + i + "\"></canvas>\n            </div>";
+            container.append(html);
+        }
+    };
+    GUI.prototype.drawClusteringOnOutput = function (clusters) {
+        var outputWidth = outputCanvas.width;
+        var outputHeight = outputCanvas.height;
+        var data = outputCtx.getImageData(0, 0, outputWidth, outputHeight);
+        var arr = data.data;
+        for (var k = 0; k < clusters.length; k++) {
+            var rgb = colors[k % colors.length];
+            for (var _i = 0, _a = clusters[k]; _i < _a.length; _i++) {
+                var v = _a[_i];
+                var x = Math.round(v.tags[0] * outputWidth);
+                var y = Math.round(v.tags[1] * outputHeight);
+                var idx = (y * outputWidth + x) * 4;
+                if (idx >= 0 && idx < arr.length) {
+                    arr[idx++] = rgb.r;
+                    arr[idx++] = rgb.g;
+                    arr[idx++] = rgb.b;
+                    arr[idx++] = 255;
+                }
+            }
+        }
+        outputCtx.putImageData(data, 0, 0);
+    };
+    return GUI;
+}());
+function loadImage(img) {
+    outputCanvas.width = img.width;
+    outputCanvas.height = img.height;
+    var imgCtx = outputCanvas.getContext("2d");
+    imgCtx.drawImage(img, 0, 0, img.width, img.height);
+    inputImageData = imgCtx.getImageData(0, 0, img.width, img.height);
+    initialData = new Uint8ClampedArray(inputImageData.data);
+    mgr.calcClusters(inputImageData);
+}
+var gui = new GUI();
+var mgr;
+function main() {
+    mgr = new ClusteringManager();
+    loadImage(img);
+}
+function dumpImage(w, h, arr) {
+    var canv = document.createElement("canvas");
+    var ctx = canv.getContext("2d");
+    canv.width = w;
+    canv.height = h;
+    document.body.appendChild(canv);
+    var tmp = ctx.getImageData(0, 0, w, h);
+    tmp.data.set(arr);
+    ctx.putImageData(tmp, 0, 0);
+}
+var ClusteringManager = (function () {
+    function ClusteringManager() {
+        this.labels = ["lbp", "Hue", "Saturation", "Lightness"];
+    }
+    ClusteringManager.prototype.convertImageDataToFeatureVectors = function (data) {
+        //    let bins = calcHist(data);
+        var dataWidth = data.width;
+        var dataHeight = data.height;
+        var vectors = [];
+        var rowBlock = 1 * dataWidth * 4;
+        var colBlock = 1 * 4;
+        var arr = data.data;
+        var idx = 0;
+        var gaussian = ImageOperations.createGaussian(5, 5, 2);
+        var grayscale = ImageOperations.grayscale(dataWidth, dataHeight, arr);
+        var gauss = ImageOperations.applyKernel(gaussian, dataWidth, dataHeight, grayscale, 1);
+        var canny = ImageOperations.applyCanny(ImageOperations.createSobelX(), ImageOperations.transpose(ImageOperations.createSobelX()), gauss, dataWidth, dataHeight, 20, 50, 1);
+        //   dumpImage(dataWidth, dataHeight, canny);
+        //  let countCanny = ImageOperations.applyKernel(ImageOperations.createKernel(16, 16, 255), dataWidth, dataHeight, canny, 1);
+        //  let normCountCanny = ImageOperations.normalize(dataWidth, dataHeight, countCanny);
+        //        normCountCanny = ImageOperations.treshold(150, 0, dataWidth, dataHeight, normCountCanny);
+        //arr = normCountCanny;
+        // dumpImage(dataWidth, dataHeight, normCountCanny);
+        var avg = [];
+        for (var j = 0; j < dataHeight; j += 1) {
+            avg[j] = [];
+            for (var i = 0; i < dataWidth; i += 1) {
+                var r = arr[idx++];
+                var g = arr[idx++];
+                var b = arr[idx++];
+                var a = arr[idx++];
+                avg[j][i] = Math.round((r + g + b) / 3);
+            }
+        }
+        idx = 0;
+        for (var j = 0; j < dataHeight; j += 1) {
+            for (var i = 0; i < dataWidth; i += 1) {
+                var baseIdx = idx;
+                var r = arr[idx++];
+                var g = arr[idx++];
+                var b = arr[idx++];
+                var a = arr[idx++];
+                var avgVal = avg[j][i];
+                var lbp = 0;
+                if (i > 0 && j > 0 && i < dataWidth - 1 && j < dataHeight - 1) {
+                    var tresholdPercent = 0.02;
+                    var center = avgVal + tresholdPercent * 256;
+                    lbp += (avg[j - 1][i - 1] > center ? 1 : 0) << 0;
+                    lbp += (avg[j - 1][i] > center ? 1 : 0) << 1;
+                    lbp += (avg[j - 1][i + 1] > center ? 1 : 0) << 2;
+                    lbp += (avg[j][i - 1] > center ? 1 : 0) << 3;
+                    lbp += (avg[j][i + 1] > center ? 1 : 0) << 4;
+                    lbp += (avg[j + 1][i - 1] > center ? 1 : 0) << 5;
+                    lbp += (avg[j + 1][i] > center ? 1 : 0) << 6;
+                    lbp += (avg[j + 1][i + 1] > center ? 1 : 0) << 7;
+                    lbp /= 256;
+                }
+                var hsl = rgbToHsl(r, g, b);
+                var midDist = Math.abs(dataWidth / 2 - i);
+                midDist /= dataWidth / 2;
+                var v = new FeatureVector([lbp, hsl[0], hsl[1], hsl[2]], [i / dataWidth, j / dataHeight]);
+                vectors.push(v);
+            }
+        }
+        return vectors;
+    };
+    ClusteringManager.prototype.calcClusters = function (data) {
+        gui.setupFeatureVectorCharts(this.labels);
+        var vectors = this.convertImageDataToFeatureVectors(data);
+        gui.drawHistograms(vectors);
+        var clustering = new Clustering(vectors);
+        this.doAsync(function () {
+            clustering.step();
+            gui.updateStatus("Iteration: " + clustering.iteration + " " + clustering.currentDeltaDistanceDiff);
+            var sortedVectorsPerClusters = clustering.vectorsPerCluster.sort(function (a, b) { return b.length - a.length; });
+            gui.drawCharts(vectors, clustering.centroids, sortedVectorsPerClusters);
+            gui.drawClusteringOnOutput(sortedVectorsPerClusters);
+            return clustering.isDone;
+        }, function () {
+            gui.drawClusteringOnOutput(clustering.vectorsPerCluster);
+        });
+    };
+    ClusteringManager.prototype.doAsync = function (func, onDone) {
+        var step = function () {
+            var result = func();
+            if (!result)
+                window.setTimeout(step, 25);
+            else
+                onDone();
+        };
+        step();
+    };
+    return ClusteringManager;
+}());
+var Clustering = (function () {
+    function Clustering(vectors) {
+        this.done = false;
+        this.windowRadius = 0.1;
+        this.iteration = 0;
+        this.vectors = vectors;
+        this.initialize();
+    }
+    Clustering.prototype.initialize = function () {
+        this.isDoingKmeans = true;
+        this.kmeans = new KMeansPlusPlus(this.vectors, 10);
+    };
+    Clustering.prototype.doKMeansStep = function () {
+        this.kmeans.step();
+        if (this.kmeans.currentDeltaDistanceDifference < 0.001) {
+            this.isDoingKmeans = false;
+            this.meanShift = new MeanShift(this.vectors, this.kmeans.centroids, this.windowRadius, 0.75);
+            this.doMeanShiftStep();
+        }
+    };
+    Clustering.prototype.doMeanShiftStep = function () {
+        this.meanShift.step();
+        if (this.meanShift.currentDeltaDistanceDifference < 0.01) {
+            if (this.kmeans.k != this.meanShift.centroids.length) {
+                this.isDoingKmeans = true;
+                this.kmeans = new KMeans(this.vectors, this.meanShift.centroids.length, this.meanShift.centroids);
+                this.meanShift = null;
+                this.doKMeansStep();
+            }
+            else {
+                // this.kmeans = new KMeans(this.vectors, this.meanShift.centroids.length, this.meanShift.centroids);
+                //this.isDoingKmeans = true;
+                //this.kmeans.buildVectorsPerCluster();
+                this.done = true;
+            }
+        }
+    };
+    Object.defineProperty(Clustering.prototype, "centroids", {
+        get: function () {
+            return this.isDoingKmeans ? this.kmeans.centroids : this.meanShift.centroids;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(Clustering.prototype, "vectorsPerCluster", {
+        get: function () {
+            return this.isDoingKmeans ? this.kmeans.vectorsPerCluster : this.meanShift.vectorsPerCluster;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(Clustering.prototype, "currentDeltaDistanceDiff", {
+        get: function () {
+            return this.isDoingKmeans ? this.kmeans.currentDeltaDistanceDifference : this.meanShift.currentDeltaDistanceDifference;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(Clustering.prototype, "isDone", {
+        get: function () {
+            return this.done;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Clustering.prototype.step = function () {
+        if (this.isDoingKmeans)
+            this.doKMeansStep();
+        else
+            this.doMeanShiftStep();
+        this.iteration++;
+    };
+    return Clustering;
+}());
+var DistanceType;
+(function (DistanceType) {
+    DistanceType[DistanceType["Euclidean"] = 0] = "Euclidean";
+    DistanceType[DistanceType["KullbackLeibler"] = 1] = "KullbackLeibler";
+})(DistanceType || (DistanceType = {}));
+var FeatureVector = (function () {
+    function FeatureVector(values, tags) {
+        this.values = values;
+        this.tags = tags;
+    }
+    /* distanceToSquared(p: FeatureVector): number {
+         let sumSquares = 0;
+         for (let i: number = 0; i < this.values.length; i++) {
+             sumSquares += (p.values[i] - this.values[i]) * (p.values[i] - this.values[i]);
+         }
+ 
+         return sumSquares;
+     }*/
+    FeatureVector.prototype.distanceTo = function (vec, type) {
+        if (type === void 0) { type = DistanceType.Euclidean; }
+        if (type == DistanceType.Euclidean) {
+            var sumSquares = 0;
+            for (var i = 0; i < this.values.length; i++) {
+                sumSquares += (vec.values[i] - this.values[i]) * (vec.values[i] - this.values[i]);
+            }
+            return Math.sqrt(sumSquares);
+        }
+        else if (type == DistanceType.KullbackLeibler) {
+            var sum = 0;
+            for (var i = 0; i < this.values.length; i++) {
+                var p = this.values[i];
+                var q = vec.values[i];
+                if (p != 0 && q != 0)
+                    sum += p * Math.log(p / q) / Math.LN2;
+            }
+            return sum;
+        }
+        return 0;
+    };
+    FeatureVector.average = function (pts) {
+        var dims = pts[0].values.length;
+        var values = new Array(dims);
+        for (var i = 0; i < dims; i++)
+            values[i] = 0;
+        for (var _i = 0, pts_1 = pts; _i < pts_1.length; _i++) {
+            var p = pts_1[_i];
+            for (var i = 0; i < dims; i++)
+                values[i] += p.values[i];
+        }
+        for (var i = 0; i < values.length; i++) {
+            values[i] /= pts.length;
+        }
+        var tagDims = pts[0].tags.length;
+        var tagValues = new Array(tagDims);
+        for (var i = 0; i < tagDims; i++)
+            tagValues[i] = 0;
+        for (var _a = 0, pts_2 = pts; _a < pts_2.length; _a++) {
+            var p = pts_2[_a];
+            for (var i = 0; i < tagDims; i++)
+                tagValues[i] += p.tags[i];
+        }
+        for (var i = 0; i < tagValues.length; i++) {
+            tagValues[i] /= pts.length;
+        }
+        return new FeatureVector(values, tagValues);
+    };
+    return FeatureVector;
+}());
+var KMeans = (function () {
+    function KMeans(points, k, centroids) {
+        if (centroids === void 0) { centroids = null; }
+        this.points = points;
+        this.k = k;
+        this.currentIteration = 0;
+        this.vectorsPerCluster = [];
+        this.centroids = [];
+        this.currentDeltaDistanceDifference = 0;
+        if (centroids != null)
+            this.centroids = centroids;
+        else
+            this.initCentroids();
+    }
+    KMeans.prototype.initCentroids = function () {
+        for (var i = 0; i < this.k; i++) {
+            this.centroids.push(this.points[Math.floor(this.points.length * Math.random())]);
+            this.vectorsPerCluster.push([]);
+        }
+    };
+    KMeans.prototype.buildVectorsPerCluster = function () {
+        // clear category
+        for (var i = 0; i < this.k; i++) {
+            this.vectorsPerCluster[i] = [];
+        }
+        // calculate points per centroid
+        for (var _i = 0, _a = this.points; _i < _a.length; _i++) {
+            var p = _a[_i];
+            var minDist = Number.MAX_VALUE;
+            var centroidIndex = -1;
+            for (var k = 0; k < this.k; k++) {
+                var dist = this.centroids[k].distanceTo(p);
+                if (dist < minDist) {
+                    centroidIndex = k;
+                    minDist = dist;
+                }
+            }
+            this.vectorsPerCluster[centroidIndex].push(p);
+        }
+    };
+    KMeans.prototype.step = function () {
+        this.buildVectorsPerCluster();
+        var totalDistanceDiff = 0;
+        // adjust centroids
+        for (var k = 0; k < this.vectorsPerCluster.length; k++) {
+            var cat = this.vectorsPerCluster[k];
+            if (cat.length > 0) {
+                var avg = FeatureVector.average(cat);
+                var dist = this.centroids[k].distanceTo(avg);
+                totalDistanceDiff += dist;
+                this.centroids[k] = avg;
+            }
+        }
+        this.currentDeltaDistanceDifference = totalDistanceDiff;
+        this.currentIteration++;
+    };
+    return KMeans;
+}());
+var KMeansPlusPlus = (function (_super) {
+    __extends(KMeansPlusPlus, _super);
+    function KMeansPlusPlus(points, k, centroids) {
+        if (centroids === void 0) { centroids = null; }
+        _super.call(this, points, k, centroids);
+    }
+    KMeansPlusPlus.prototype.initCentroids = function () {
+        // add initial center
+        this.centroids.push(this.points[Math.floor(this.points.length * Math.random())]);
+        var _loop_1 = function() {
+            // determine distances of all points to its nearest centroid
+            var distances = new Array(this_1.points.length);
+            var maxDistance = 0;
+            for (var i = 0; i < this_1.points.length; i++) {
+                var minDist = Number.MAX_VALUE;
+                // determine distance to nearest centroid
+                for (var _i = 0, _a = this_1.centroids; _i < _a.length; _i++) {
+                    var c = _a[_i];
+                    var dist = this_1.points[i].distanceTo(c);
+                    if (minDist < dist)
+                        minDist = dist;
+                }
+                distances[i] = minDist;
+                if (minDist > maxDistance)
+                    maxDistance = minDist;
+            }
+            // normalize distances
+            for (var i = 0; i < distances.length; i++)
+                distances[i] /= maxDistance;
+            // select random center according to weighted distribution of dist*dist
+            var selectedIndex = this_1.random(this_1.points, function (idx) { return distances[idx] * distances[idx]; });
+            this_1.centroids.push(this_1.points[selectedIndex]);
+        };
+        var this_1 = this;
+        while (this.centroids.length < this.k) {
+            _loop_1();
+        }
+    };
+    KMeansPlusPlus.prototype.random = function (elements, weightFunc) {
+        var totalWeight = 0; // this stores sum of weights of all elements before current
+        var selected = -1;
+        for (var i = 0; i < elements.length; i++) {
+            var weight = weightFunc(i); // weight of current element
+            var r = Math.floor(Math.random() * (totalWeight + weight)); // random value
+            if (r >= totalWeight)
+                selected = i; // it is the probability of discarding last selected element and selecting current one instead
+            totalWeight += weight; // increase weight sum
+        }
+        return selected; // when iterations end, selected is some element of sequence. 
+    };
+    return KMeansPlusPlus;
+}(KMeans));
+var MeanShift = (function () {
+    function MeanShift(points, centroids, windowRadius, mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius) {
+        this.points = points;
+        this.windowRadius = 50;
+        this.mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius = 0.5;
+        this.vectorsPerCluster = [];
+        this.currentDeltaDistanceDifference = 0;
+        this.currentIteration = 0;
+        this.centroids = centroids;
+        this.windowRadius = windowRadius;
+        this.mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius = mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius;
+    }
+    MeanShift.prototype.calculateVectorsPerCluster = function () {
+        // clear category
+        this.vectorsPerCluster = [];
+        for (var i = 0; i < this.centroids.length; i++)
+            this.vectorsPerCluster.push([]);
+        // determine all points of all centroids within the window radius
+        for (var _i = 0, _a = this.points; _i < _a.length; _i++) {
+            var p = _a[_i];
+            var minC = -1;
+            var minCDist = Number.MAX_VALUE;
+            for (var c = 0; c < this.centroids.length; c++) {
+                var dist = this.centroids[c].distanceTo(p);
+                if (dist < this.windowRadius && dist < minCDist) {
+                    minCDist = dist;
+                    minC = c;
+                }
+            }
+            if (minC != -1)
+                this.vectorsPerCluster[minC].push(p);
+        }
+    };
+    MeanShift.prototype.step = function () {
+        this.calculateVectorsPerCluster();
+        var totalDistanceDiff = 0;
+        // adjust centroids based on their new points
+        for (var c = 0; c < this.centroids.length; c++) {
+            var cat = this.vectorsPerCluster[c];
+            if (cat.length > 0) {
+                var avg = FeatureVector.average(cat);
+                var dist = this.centroids[c].distanceTo(avg);
+                totalDistanceDiff += dist;
+                this.centroids[c] = avg;
+            }
+        }
+        this.currentDeltaDistanceDifference = totalDistanceDiff;
+        // merge centroids that are close
+        var maxDistance = this.mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius * this.windowRadius;
+        var merged = new Array(this.centroids.length);
+        var newCentroids = [];
+        for (var c1 = 0; c1 < this.centroids.length; c1++) {
+            var centroidsToMerge = [];
+            // if not merged already
+            if (!merged[c1]) {
+                // check if there are other centroids close and add them to the list to merge
+                for (var c2 = c1 + 1; c2 < this.centroids.length; c2++) {
+                    if (!merged[c2] && this.centroids[c1].distanceTo(this.centroids[c2]) < maxDistance) {
+                        centroidsToMerge.push(this.centroids[c2]);
+                        merged[c2] = true;
+                    }
+                }
+                // if there are centroids to merge with the current one
+                if (centroidsToMerge.length > 0) {
+                    // add the current one and take the average
+                    centroidsToMerge.push(this.centroids[c1]);
+                    merged[c1] = true;
+                    var newCentroid = FeatureVector.average(centroidsToMerge);
+                    newCentroids.push(newCentroid);
+                }
+                else {
+                    // no merging to be done, just take the centroid as is
+                    newCentroids.push(this.centroids[c1]);
+                }
+            }
+            else {
+            }
+        }
+        // take the merged centroids as new basis
+        this.centroids = newCentroids;
+        // update clusters
+        this.calculateVectorsPerCluster();
+        this.currentIteration++;
+    };
+    return MeanShift;
+}());
+function rgbToHsv(r, g, b) {
+    r = r / 255, g = g / 255, b = b / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, v = max;
+    var d = max - min;
+    s = max == 0 ? 0 : d / max;
+    if (max == min) {
+        h = 0; // achromatic
+    }
+    else {
+        switch (max) {
+            case r:
+                h = (g - b) / d + (g < b ? 6 : 0);
+                break;
+            case g:
+                h = (b - r) / d + 2;
+                break;
+            case b:
+                h = (r - g) / d + 4;
+                break;
+        }
+        h /= 6;
+    }
+    return [h, s, v];
+}
+function hsvToRgb(h, s, v) {
+    var r, g, b;
+    var i = Math.floor(h * 6);
+    var f = h * 6 - i;
+    var p = v * (1 - s);
+    var q = v * (1 - f * s);
+    var t = v * (1 - (1 - f) * s);
+    switch (i % 6) {
+        case 0:
+            r = v, g = t, b = p;
+            break;
+        case 1:
+            r = q, g = v, b = p;
+            break;
+        case 2:
+            r = p, g = v, b = t;
+            break;
+        case 3:
+            r = p, g = q, b = v;
+            break;
+        case 4:
+            r = t, g = p, b = v;
+            break;
+        case 5:
+            r = v, g = p, b = q;
+            break;
+    }
+    return [r * 255, g * 255, b * 255];
+}
+function rgbToHsl(r, g, b) {
+    r /= 255, g /= 255, b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, l = (max + min) / 2;
+    if (max == min) {
+        h = s = 0; // achromatic
+    }
+    else {
+        var d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r:
+                h = (g - b) / d + (g < b ? 6 : 0);
+                break;
+            case g:
+                h = (b - r) / d + 2;
+                break;
+            case b:
+                h = (r - g) / d + 4;
+                break;
+        }
+        h /= 6;
+    }
+    return [h, s, l];
+}
+function hslToRgb(h, s, l) {
+    var r, g, b;
+    if (s == 0) {
+        r = g = b = l; // achromatic
+    }
+    else {
+        function hue2rgb(p, q, t) {
+            if (t < 0)
+                t += 1;
+            if (t > 1)
+                t -= 1;
+            if (t < 1 / 6)
+                return p + (q - p) * 6 * t;
+            if (t < 1 / 2)
+                return q;
+            if (t < 2 / 3)
+                return p + (q - p) * (2 / 3 - t) * 6;
+            return p;
+        }
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1 / 3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return [r * 255, g * 255, b * 255];
+}
+var CLIPBOARD = new CLIPBOARD_CLASS("outputCanvas", true);
+function CLIPBOARD_CLASS(canvas_id, autoresize) {
+    var _self = this;
+    var canvas = document.getElementById(canvas_id);
+    var ctx = canvas.getContext("2d");
+    var ctrl_pressed = false;
+    var reading_dom = false;
+    var text_top = 15;
+    var pasteCatcher;
+    var paste_mode;
+    //handlers
+    document.addEventListener('keydown', function (e) {
+        _self.on_keyboard_action(e);
+    }, false); //firefox fix
+    document.addEventListener('keyup', function (e) {
+        _self.on_keyboardup_action(e);
+    }, false); //firefox fix
+    document.addEventListener('paste', function (e) {
+        _self.paste_auto(e);
+    }, false); //official paste handler
+    //constructor - prepare
+    this.init = function () {
+        //if using auto
+        if (window.Clipboard)
+            return;
+        pasteCatcher = document.createElement("div");
+        pasteCatcher.setAttribute("id", "paste_ff");
+        pasteCatcher.setAttribute("contenteditable", "");
+        pasteCatcher.style.cssText = 'opacity:0;position:fixed;top:0px;left:0px;';
+        pasteCatcher.style.marginLeft = "-20px";
+        pasteCatcher.style.width = "10px";
+        document.body.appendChild(pasteCatcher);
+        document.getElementById('paste_ff').addEventListener('DOMSubtreeModified', function () {
+            if (paste_mode == 'auto' || ctrl_pressed == false)
+                return true;
+            //if paste handle failed - capture pasted object manually
+            if (pasteCatcher.children.length == 1) {
+                if (pasteCatcher.firstElementChild.src != undefined) {
+                    //image
+                    _self.paste_createImage(pasteCatcher.firstElementChild.src);
+                }
+            }
+            //register cleanup after some time.
+            setTimeout(function () {
+                pasteCatcher.innerHTML = '';
+            }, 20);
+            return false;
+        }, false);
+    }();
+    //default paste action
+    this.paste_auto = function (e) {
+        paste_mode = '';
+        pasteCatcher.innerHTML = '';
+        var plain_text_used = false;
+        if (e.clipboardData) {
+            var items = e.clipboardData.items;
+            if (items) {
+                paste_mode = 'auto';
+                //access data directly
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf("image") !== -1) {
+                        //image
+                        var blob = items[i].getAsFile();
+                        var URLObj = window.URL || window.webkitURL;
+                        var source = URLObj.createObjectURL(blob);
+                        this.paste_createImage(source);
+                    }
+                }
+                e.preventDefault();
+            }
+            else {
+            }
+        }
+    };
+    //on keyboard press - 
+    this.on_keyboard_action = function (event) {
+        var k = event.keyCode;
+        //ctrl
+        if (k == 17 || event.metaKey || event.ctrlKey) {
+            if (ctrl_pressed == false)
+                ctrl_pressed = true;
+        }
+        //c
+        if (k == 86) {
+            if (document.activeElement != undefined && document.activeElement.type == 'text') {
+                //let user paste into some input
+                return false;
+            }
+            if (ctrl_pressed == true && !window.Clipboard)
+                pasteCatcher.focus();
+        }
+        return false;
+    };
+    //on keybaord release
+    this.on_keyboardup_action = function (event) {
+        var k = event.keyCode;
+        //ctrl
+        if (k == 17 || event.metaKey || event.ctrlKey || event.key == 'Meta')
+            ctrl_pressed = false;
+    };
+    //draw image
+    this.paste_createImage = function (source) {
+        var pastedImage = $("#img").get(0);
+        pastedImage.onload = function () {
+            var img = pastedImage;
+            loadImage(img);
+        };
+        pastedImage.src = source;
+    };
+}
+var ImageOperations;
+(function (ImageOperations) {
+    function grayscale(w, h, src) {
+        var idx = 0;
+        var dst = new Uint8ClampedArray(src);
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                var avg = (src[idx] + src[idx + 1] + src[idx + 2]) / 3;
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+                idx++;
+            }
+        }
+        return dst;
+    }
+    ImageOperations.grayscale = grayscale;
+    function applyKernel(kernel, w, h, src, nrOfChannels) {
+        var idx = 0;
+        var dst = new Float32Array(src);
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                for (var c = 0; c < 3; c++) {
+                    if (c < nrOfChannels) {
+                        var r = convolve(kernel, src, w, h, i, j, 0);
+                        dst[idx] = r;
+                    }
+                    else
+                        dst[idx] = 0;
+                    idx++;
+                }
+                idx++;
+            }
+        }
+        return dst;
+    }
+    ImageOperations.applyKernel = applyKernel;
+    function treshold(treshold, valueToSetToIfAbove, w, h, src) {
+        var idx = 0;
+        var dst = new Uint8ClampedArray(src);
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                if (treshold > src[idx])
+                    dst[idx] = valueToSetToIfAbove;
+                idx++;
+                if (treshold > src[idx])
+                    dst[idx] = valueToSetToIfAbove;
+                idx++;
+                if (treshold > src[idx])
+                    dst[idx] = valueToSetToIfAbove;
+                idx++;
+                idx++;
+            }
+        }
+        return dst;
+    }
+    ImageOperations.treshold = treshold;
+    function normalize(w, h, src) {
+        var idx = 0;
+        var dst = new Uint8ClampedArray(src);
+        var maxR = 0;
+        var maxG = 0;
+        var maxB = 0;
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                if (maxR < src[idx])
+                    maxR = src[idx];
+                idx++;
+                if (maxG < src[idx])
+                    maxG = src[idx];
+                idx++;
+                if (maxB < src[idx])
+                    maxB = src[idx];
+                idx++;
+                idx++;
+            }
+        }
+        idx = 0;
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                dst[idx] = Math.round(src[idx] / maxR * 255);
+                idx++;
+                dst[idx] = Math.round(src[idx] / maxG * 255);
+                idx++;
+                dst[idx] = Math.round(src[idx] / maxB * 255);
+                idx++;
+                idx++;
+            }
+        }
+        return dst;
+    }
+    ImageOperations.normalize = normalize;
+    function applyCanny(Gx, Gy, src, w, h, lowerTresh, upperTresh, nrOfChannels) {
+        if (nrOfChannels === void 0) { nrOfChannels = 3; }
+        var idx = 0;
+        var mags = new Float32Array(src);
+        var angs = new Float32Array(src);
+        var dst = new Uint8ClampedArray(src);
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                for (var channel = 0; channel < 3; channel++) {
+                    if (channel < nrOfChannels) {
+                        var r1 = convolve(Gx, src, w, h, i, j, channel);
+                        var r2 = convolve(Gy, src, w, h, i, j, channel);
+                        var gr = Math.sqrt(r1 * r1 + r2 * r2);
+                        var angr = Math.atan2(r2, r1);
+                        mags[idx] = gr;
+                        angs[idx] = angr;
+                    }
+                    idx++;
+                }
+                idx++;
+            }
+        }
+        // check 0,45,90 and 135° angles and only keep the edge pixels that 
+        // which magnitude is both higher than the TOOT
+        idx = 0;
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                for (var channel = 0; channel < 3; channel++) {
+                    if (channel < nrOfChannels) {
+                        var r1 = convolve(Gx, src, w, h, i, j, channel);
+                        var r2 = convolve(Gy, src, w, h, i, j, channel);
+                        var gr = Math.sqrt(r1 * r1 + r2 * r2);
+                        var angr = Math.atan2(r2, r1);
+                        if (angr < 0)
+                            angr += Math.PI;
+                        var mag = mags[idx];
+                        if (angr >= 0 && angr <= Math.PI / 8 || angr > 7 * Math.PI / 8) {
+                            // horizontal
+                            var left = mags[(idx - 4)];
+                            var right = mags[(idx + 4)];
+                            if (mag > left && mag > right)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        else if (angr > Math.PI / 8 && angr <= 3 * Math.PI / 8) {
+                            // 1st diagonal 
+                            var leftbottom = mags[(idx - 4 + w * 4)];
+                            var righttop = mags[(idx + 4 - w * 4)];
+                            if (mag > leftbottom && mag > righttop)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        else if (angr > 3 * Math.PI / 8 && angr <= 5 * Math.PI / 8) {
+                            // vertical
+                            var top = mags[(idx - w * 4)];
+                            var bottom = mags[(idx + w * 4)];
+                            if (mag > top && mag > bottom)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        else if (angr > 5 * Math.PI / 8 && angr <= 7 * Math.PI / 8) {
+                            // 2nd diagonal 
+                            var lefttop = mags[(idx - 4 - w * 4)];
+                            var rightbottom = mags[(idx + 4 + w * 4)];
+                            if (mag > lefttop && mag > rightbottom)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        if (dst[idx] == 255) {
+                            if (gr > upperTresh)
+                                dst[idx] = 255;
+                            else if (gr >= lowerTresh && gr < upperTresh)
+                                dst[idx] = 128;
+                            else
+                                dst[idx] = 0;
+                        }
+                    }
+                    idx++;
+                }
+                idx++;
+            }
+        }
+        idx = 0;
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                for (var channel = 0; channel < 3; channel++) {
+                    if (channel < nrOfChannels) {
+                        if (dst[idx] == 128) {
+                            var connectedToStrongEdge = false;
+                            for (var l = (j == 0) ? 0 : -1; l < ((j == h - 1) ? 0 : 1) && !connectedToStrongEdge; l++) {
+                                for (var k = (i == 0) ? 0 : -1; k < ((i == w - 1) ? 0 : 1) && !connectedToStrongEdge; k++) {
+                                    if (dst[idx + k * 4 + l * w * 4] == 255) {
+                                        // connected to strong edge
+                                        dst[idx] = 255;
+                                        connectedToStrongEdge = true;
+                                    }
+                                }
+                            }
+                            if (!connectedToStrongEdge)
+                                dst[idx] = 0;
+                        }
+                    }
+                    idx++;
+                }
+            }
+        }
+        return dst;
+    }
+    ImageOperations.applyCanny = applyCanny;
+    function convolve(kernel, data, imgWidth, imgHeight, x, y, channel) {
+        var sum = 0;
+        for (var j = 0; j < kernel.length; j++) {
+            var row = kernel[j];
+            var l = y - j - Math.floor(kernel.length / 2);
+            if (l < 0)
+                l = 0;
+            if (l >= imgHeight)
+                l = imgHeight - 1;
+            for (var i = 0; i < row.length; i++) {
+                var k = x + i - Math.floor(row.length / 2);
+                if (k < 0)
+                    k = 0;
+                if (k >= imgWidth)
+                    k = imgWidth - 1;
+                var val = data[(l * imgWidth + k) * 4 + channel] * kernel[j][i];
+                sum += val;
+            }
+        }
+        return sum;
+    }
+    ImageOperations.convolve = convolve;
+    function createKernel(w, h, defaultValue) {
+        var arr = [];
+        for (var j = 0; j < h; j++) {
+            var row = [];
+            arr.push(row);
+            for (var i = 0; i < w; i++) {
+                row.push(defaultValue);
+            }
+        }
+        return arr;
+    }
+    ImageOperations.createKernel = createKernel;
+    function createSobelX() {
+        return [
+            [-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]
+        ];
+    }
+    ImageOperations.createSobelX = createSobelX;
+    function transpose(kernel) {
+        var newKernel = [];
+        for (var j = 0; j < kernel.length; j++) {
+            newKernel.push([]);
+            for (var i = 0; i < kernel[j].length; i++) {
+                newKernel[j][i] = kernel[i][j];
+            }
+        }
+        return newKernel;
+    }
+    ImageOperations.transpose = transpose;
+    function createGaussian(w, h, sigma) {
+        var cx = 0;
+        var cy = 0;
+        var sum = 0;
+        var arr = [];
+        for (var j = 0; j < h; j++) {
+            var row = [];
+            arr.push(row);
+            for (var i = 0; i < w; i++) {
+                var x = i - Math.floor(w / 2);
+                var y = j - Math.floor(h / 2);
+                var val = Math.exp(-(x - cx) * (x - cx) / (2 * sigma * sigma) -
+                    (y - cy) * (y - cy) / (2 * sigma * sigma));
+                sum += val;
+                row.push(val);
+            }
+        }
+        for (var j = 0; j < h; j++) {
+            for (var i = 0; i < w; i++) {
+                arr[j][i] /= sum;
+            }
+        }
+        return arr;
+    }
+    ImageOperations.createGaussian = createGaussian;
+    function printKernel(kernel) {
+        var str = "";
+        for (var j = 0; j < kernel.length; j++) {
+            var row = kernel[j];
+            for (var i = 0; i < row.length; i++) {
+                str += row[i].toFixed(2) + " ";
+            }
+            str += "<br/>";
+        }
+        console.log(str);
+    }
+    ImageOperations.printKernel = printKernel;
+})(ImageOperations || (ImageOperations = {}));
+$(document).ready(function () {
+    $("#btnGo").click(function () {
+        main();
+    });
+});
+//# sourceMappingURL=temp.js.map</script>
+<script id='_typescriptCode' type='text/typescript'> 
+/// <reference path="https://cdn.rawgit.com/borisyankov/DefinitelyTyped/master/jquery/jquery.d.ts" />
+
+let img = <HTMLImageElement>document.getElementById("img");
+let outputCanvas = <HTMLCanvasElement>document.getElementById("outputCanvas");
+let outputCtx = <CanvasRenderingContext2D>outputCanvas.getContext("2d");
+
+let inputImageData: ImageData;
+var initialData: Uint8ClampedArray;
+
+
+
+
+class RGB {
+    constructor(public r: number, public g: number, public b: number) { }
+    toString() { return `rgb(${Math.floor(this.r)},${Math.floor(this.g)},${Math.floor(this.b)})`; }
+}
+
+let colors: RGB[] = [
+    new RGB(255, 0, 0),
+    new RGB(0, 255, 0),
+    new RGB(0, 0, 255),
+    new RGB(0, 255, 255),
+    new RGB(255, 255, 0),
+    new RGB(255, 0, 255),
+    new RGB(128, 255, 128),
+    new RGB(128, 128, 255),
+    new RGB(255, 128, 128),
+    new RGB(255, 255, 128),
+    new RGB(255, 128, 255),
+    new RGB(128, 128, 255),
+];
+
+
+class GUI {
+
+    updateStatus(str: string) {
+        $("#debug").text(str);
+    }
+
+    drawCharts(vectors: FeatureVector[], centroids: FeatureVector[], clusters: FeatureVector[][]) {
+        let charts = $(".chart");
+        for (let c: number = 0; c < charts.length; c++) {
+
+
+            let chart = <HTMLCanvasElement>charts[c];
+            let chartCtx = <CanvasRenderingContext2D>chart.getContext("2d");
+
+            let xIdx = parseInt($(chart).attr("data-idx1"));
+            let yIdx = parseInt($(chart).attr("data-idx2"));
+
+            this.drawChart(chart, chartCtx, vectors, centroids, clusters, xIdx, yIdx);
+        }
+    }
+
+    private drawChart(chart: HTMLCanvasElement, chartCtx: CanvasRenderingContext2D, vectors: FeatureVector[], centroids: FeatureVector[], clusters: FeatureVector[][], xIdx: number, yIdx: number) {
+
+        let chartWidth = chart.width;
+        let chartHeight = chart.height;
+
+        chartCtx.fillStyle = "white";
+        chartCtx.fillRect(0, 0, chartWidth, chartHeight);
+
+        let chartData = chartCtx.getImageData(0, 0, chartWidth, chartHeight);
+        let arr = chartData.data;
+
+
+        for (let v of vectors) {
+            let x = Math.round(v.values[xIdx] * (chartWidth - 1));
+            let y = Math.round((1 - v.values[yIdx]) * (chartHeight - 1));
+
+            let idx = (y * chartWidth + x) * 4;
+
+            if (idx >= 0 && idx < arr.length) {
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] -= 20;
+                idx++;
+                arr[idx] = 255;
+            }
+        }
+
+
+        for (let k: number = 0; k < clusters.length; k++) {
+            let color = colors[k % colors.length];
+
+
+            for (let v of clusters[k]) {
+                let x = Math.round(v.values[xIdx] * chartWidth);
+                let y = Math.round((1 - v.values[yIdx]) * chartHeight);
+
+                let idx = (y * chartWidth + x) * 4;
+
+                if (idx >= 0 && idx < arr.length) {
+                    arr[idx] = color.r;
+                    idx++;
+                    arr[idx] = color.g;
+                    idx++;
+                    arr[idx] = color.b;
+                    idx++;
+                    arr[idx] = 255;
+                }
+            }
+
+
+        }
+        chartCtx.putImageData(chartData, 0, 0);
+
+        for (let k: number = 0; k < clusters.length; k++) {
+            let color = colors[k % colors.length];
+            chartCtx.fillStyle = color;
+            let cx = Math.floor(centroids[k].values[xIdx] * chartWidth);
+            let cy = Math.floor((1 - centroids[k].values[yIdx]) * chartHeight);
+            chartCtx.beginPath();
+            chartCtx.arc(cx, cy, 3, 0, 2 * Math.PI, false);
+            chartCtx.fill();
+        }
+
+
+
+    }
+
+
+    drawHistograms(vectors: FeatureVector[]) {
+        let hists = $(".histogram");
+        for (let c: number = 0; c < hists.length; c++) {
+
+
+            let hist = <HTMLCanvasElement>hists[c];
+            let histCtx = <CanvasRenderingContext2D>hist.getContext("2d");
+
+            let xIdx = parseInt($(hist).attr("data-idx"));
+            let bins = this.calcHist(vectors, xIdx);
+            this.drawHist(hist, histCtx, bins);
+        }
+    }
+
+    private calcHist(vectors: FeatureVector[], attrIdx: number): number[] {
+        let bins: number[] = [];
+        for (let i: number = 0; i < 256; i++)
+            bins.push(0);
+
+        let max = 0;
+        for (let v of vectors) {
+            let val = Math.round(v.values[attrIdx] * 255);
+            if (val >= 0 && val < 256) {
+                bins[val]++;
+                if (max < bins[val])
+                    max = bins[val];
+            }
+        }
+
+        for (let i: number = 0; i < bins.length; i++)
+            bins[i] /= max;
+
+        return bins;
+    }
+
+    private drawHist(cHistogram: HTMLCanvasElement, ctxHistogram: CanvasRenderingContext2D, bins: number[]) {
+        let histWidth = cHistogram.width;
+        let histHeight = cHistogram.height;
+        ctxHistogram.fillStyle = "white";
+        ctxHistogram.fillRect(0, 0, histWidth, histHeight);
+        ctxHistogram.fillStyle = "black";
+        for (let i: number = 0; i < bins.length; i++) {
+            let x = i;
+            let y = (1 - bins[i]) * histHeight;
+            ctxHistogram.fillRect(x, y, 1, histHeight - y);
+        }
+    }
+
+    setupFeatureVectorCharts(labels: string[]) {
+        let container = $("#container");
+        container.empty();
+
+        for (let i: number = 0; i < labels.length; i++) {
+            for (let j: number = i + 1; j < labels.length; j++) {
+
+                let html = `<div class="chartcontainer">
+                <span>${labels[i]} - ${labels[j]}</span>
+                <br/>
+                <canvas class="chart" width="256" height="256" data-idx1="${i}" data-idx2="${j}"></canvas>
+            </div>`;
+                container.append(html);
+            }
+        }
+        container.append("<br style='clear:both'/>");
+        for (let i: number = 0; i < labels.length; i++) {
+            let html = `<div class="chartcontainer">
+                <span>Histogram of ${labels[i]}</span>
+                <br/>
+                <canvas class="histogram" width="256" height="256" data-idx="${i}"></canvas>
+            </div>`;
+            container.append(html);
+        }
+    }
+
+    drawClusteringOnOutput(clusters: FeatureVector[][]) {
+
+        let outputWidth = outputCanvas.width;
+        let outputHeight = outputCanvas.height;
+
+        let data = outputCtx.getImageData(0, 0, outputWidth, outputHeight);
+        let arr = data.data;
+
+        for (let k: number = 0; k < clusters.length; k++) {
+            let rgb = colors[k % colors.length];
+
+            for (let v of clusters[k]) {
+                let x = Math.round(v.tags[0] * outputWidth);
+                let y = Math.round(v.tags[1] * outputHeight);
+
+                let idx = (y * outputWidth + x) * 4;
+
+                if (idx >= 0 && idx < arr.length) {
+                    arr[idx++] = rgb.r;
+                    arr[idx++] = rgb.g;
+                    arr[idx++] = rgb.b;
+                    arr[idx++] = 255;
+                }
+
+                //chartCtx.beginPath();
+                //chartCtx.arc(x, y, 3, 0, 2 * Math.PI, false);
+                //chartCtx.fill();
+            }
+        }
+
+        outputCtx.putImageData(data, 0, 0);
+
+    }
+
+}
+
+
+function loadImage(img: HTMLImageElement) {
+    outputCanvas.width = img.width;
+    outputCanvas.height = img.height;
+    let imgCtx = outputCanvas.getContext("2d");
+    imgCtx.drawImage(img, 0, 0, img.width, img.height);
+    inputImageData = imgCtx.getImageData(0, 0, img.width, img.height);
+    initialData = new Uint8ClampedArray(inputImageData.data);
+
+    mgr.calcClusters(inputImageData);
+}
+
+
+
+let gui = new GUI();
+let mgr: ClusteringManager;
+function main() {
+
+    mgr = new ClusteringManager();
+    loadImage(img);
+
+}
+
+
+function dumpImage(w: number, h: number, arr) {
+    let canv = <HTMLCanvasElement>document.createElement("canvas");
+    let ctx = canv.getContext("2d");
+    canv.width = w;
+    canv.height = h;
+    document.body.appendChild(canv);
+    let tmp = ctx.getImageData(0, 0, w, h);
+    tmp.data.set(arr);
+    ctx.putImageData(tmp, 0, 0);
+
+}
+
+class ClusteringManager {
+
+    labels: string[] = ["lbp", "Hue", "Saturation", "Lightness"];
+
+
+    convertImageDataToFeatureVectors(data: ImageData): FeatureVector[] {
+        //    let bins = calcHist(data);
+
+
+
+
+        let dataWidth = data.width;
+        let dataHeight = data.height;
+
+        let vectors: FeatureVector[] = [];
+
+        let rowBlock = 1 * dataWidth * 4;
+        let colBlock = 1 * 4;
+
+        let arr = data.data;
+        let idx = 0;
+
+        let gaussian: number[][] = ImageOperations.createGaussian(5, 5, 2);
+
+
+        let grayscale = ImageOperations.grayscale(dataWidth, dataHeight, arr);
+        let gauss = ImageOperations.applyKernel(gaussian, dataWidth, dataHeight, grayscale, 1);
+        let canny = ImageOperations.applyCanny(ImageOperations.createSobelX(), ImageOperations.transpose(ImageOperations.createSobelX()), gauss, dataWidth, dataHeight, 20, 50, 1);
+
+     //   dumpImage(dataWidth, dataHeight, canny);
+
+      //  let countCanny = ImageOperations.applyKernel(ImageOperations.createKernel(16, 16, 255), dataWidth, dataHeight, canny, 1);
+      //  let normCountCanny = ImageOperations.normalize(dataWidth, dataHeight, countCanny);
+        //        normCountCanny = ImageOperations.treshold(150, 0, dataWidth, dataHeight, normCountCanny);
+        //arr = normCountCanny;
+
+       // dumpImage(dataWidth, dataHeight, normCountCanny);
+
+        let avg: number[][] = [];
+        for (let j: number = 0; j < dataHeight; j += 1) {
+            avg[j] = [];
+            for (let i: number = 0; i < dataWidth; i += 1) {
+
+
+                let r = arr[idx++];
+                let g = arr[idx++];
+                let b = arr[idx++];
+                let a = arr[idx++];
+                avg[j][i] = Math.round((r + g + b) / 3);
+            }
+        }
+
+        idx = 0;
+        for (let j: number = 0; j < dataHeight; j += 1) {
+            for (let i: number = 0; i < dataWidth; i += 1) {
+
+                let baseIdx = idx;
+                let r = arr[idx++];
+                let g = arr[idx++];
+                let b = arr[idx++];
+                let a = arr[idx++];
+
+                let avgVal = avg[j][i];
+
+                let lbp: number = 0;
+                if (i > 0 && j > 0 && i < dataWidth - 1 && j < dataHeight - 1) {
+                    let tresholdPercent = 0.02;
+                    let center = avgVal + tresholdPercent * 256;
+                    lbp += (avg[j - 1][i - 1] > center ? 1 : 0) << 0;
+                    lbp += (avg[j - 1][i] > center ? 1 : 0) << 1;
+                    lbp += (avg[j - 1][i + 1] > center ? 1 : 0) << 2;
+                    lbp += (avg[j][i - 1] > center ? 1 : 0) << 3;
+                    lbp += (avg[j][i + 1] > center ? 1 : 0) << 4;
+                    lbp += (avg[j + 1][i - 1] > center ? 1 : 0) << 5;
+                    lbp += (avg[j + 1][i] > center ? 1 : 0) << 6;
+                    lbp += (avg[j + 1][i + 1] > center ? 1 : 0) << 7;
+
+                    lbp /= 256;
+
+                }
+                let hsl = rgbToHsl(r, g, b);
+
+                let midDist = Math.abs(dataWidth / 2 - i);
+                midDist /= dataWidth / 2;
+
+                let v = new FeatureVector([lbp, hsl[0], hsl[1], hsl[2]],
+                    [i / dataWidth, j / dataHeight]);
+
+
+                vectors.push(v);
+            }
+        }
+
+
+        return vectors;
+    }
+
+
+    calcClusters(data: ImageData) {
+
+        gui.setupFeatureVectorCharts(this.labels);
+
+        let vectors = this.convertImageDataToFeatureVectors(data);
+
+        gui.drawHistograms(vectors);
+
+
+        let clustering = new Clustering(vectors);
+
+
+        this.doAsync(() => {
+
+            clustering.step();
+            gui.updateStatus("Iteration: " + clustering.iteration + " " + clustering.currentDeltaDistanceDiff);
+
+            let sortedVectorsPerClusters = clustering.vectorsPerCluster.sort(function(a, b) { return b.length - a.length; });
+            gui.drawCharts(vectors, clustering.centroids, sortedVectorsPerClusters);
+            gui.drawClusteringOnOutput(sortedVectorsPerClusters);
+            return clustering.isDone;
+        }, () => {
+
+            gui.drawClusteringOnOutput(clustering.vectorsPerCluster);
+        });
+    }
+
+
+    doAsync(func: () => boolean, onDone: Function) {
+
+        let step = () => {
+            let result = func();
+            if (!result)
+                window.setTimeout(step, 25);
+            else
+                onDone();
+        }
+        step();
+    }
+}
+
+
+class Clustering {
+
+    private kmeans: KMeans;
+    private meanShift: MeanShift;
+    private vectors: FeatureVector[];
+    private isDoingKmeans: boolean;
+    private done: boolean = false;
+    public windowRadius: number = 0.1;
+
+    public iteration: number = 0;
+    constructor(vectors: FeatureVector[]) {
+        this.vectors = vectors;
+        this.initialize();
+
+    }
+    initialize() {
+        this.isDoingKmeans = true;
+        this.kmeans = new KMeansPlusPlus(this.vectors, 10);
+    }
+
+    private doKMeansStep() {
+        this.kmeans.step();
+
+
+        if (this.kmeans.currentDeltaDistanceDifference < 0.001) {
+            this.isDoingKmeans = false;
+            this.meanShift = new MeanShift(this.vectors, this.kmeans.centroids, this.windowRadius, 0.75);
+            this.doMeanShiftStep();
+        }
+    }
+
+    private doMeanShiftStep() {
+        this.meanShift.step();
+
+
+        if (this.meanShift.currentDeltaDistanceDifference < 0.01) {
+            if (this.kmeans.k != this.meanShift.centroids.length) {
+                this.isDoingKmeans = true;
+                this.kmeans = new KMeans(this.vectors, this.meanShift.centroids.length, this.meanShift.centroids);
+                this.meanShift = null;
+                this.doKMeansStep();
+            }
+            else {
+                // this.kmeans = new KMeans(this.vectors, this.meanShift.centroids.length, this.meanShift.centroids);
+                //this.isDoingKmeans = true;
+                //this.kmeans.buildVectorsPerCluster();
+
+                this.done = true;
+            }
+        }
+    }
+
+    get centroids(): FeatureVector[] {
+        return this.isDoingKmeans ? this.kmeans.centroids : this.meanShift.centroids;
+    }
+
+    get vectorsPerCluster(): FeatureVector[][] {
+        return this.isDoingKmeans ? this.kmeans.vectorsPerCluster : this.meanShift.vectorsPerCluster;
+    }
+
+    get currentDeltaDistanceDiff(): number {
+        return this.isDoingKmeans ? this.kmeans.currentDeltaDistanceDifference : this.meanShift.currentDeltaDistanceDifference;
+    }
+
+    get isDone() {
+        return this.done;
+    }
+
+    step() {
+        if (this.isDoingKmeans)
+            this.doKMeansStep();
+        else
+            this.doMeanShiftStep();
+        this.iteration++;
+    }
+}
+
+enum DistanceType {
+    Euclidean,
+    KullbackLeibler
+}
+
+class FeatureVector {
+
+    constructor(public values: number[], public tags?: number[]) { }
+
+    /* distanceToSquared(p: FeatureVector): number {
+         let sumSquares = 0;
+         for (let i: number = 0; i < this.values.length; i++) {
+             sumSquares += (p.values[i] - this.values[i]) * (p.values[i] - this.values[i]);
+         }
+ 
+         return sumSquares;
+     }*/
+
+    distanceTo(vec: FeatureVector, type: DistanceType = DistanceType.Euclidean): number {
+        if (type == DistanceType.Euclidean) {
+            let sumSquares = 0;
+            for (let i: number = 0; i < this.values.length; i++) {
+                sumSquares += (vec.values[i] - this.values[i]) * (vec.values[i] - this.values[i]);
+            }
+
+            return Math.sqrt(sumSquares);
+        }
+        else if (type == DistanceType.KullbackLeibler) {
+
+            let sum = 0;
+            for (let i: number = 0; i < this.values.length; i++) {
+                let p = this.values[i];
+                let q = vec.values[i];
+                if (p != 0 && q != 0)
+                    sum += p * Math.log(p / q) / Math.LN2;
+            }
+            return sum;
+        }
+        return 0;
+    }
+
+
+
+    static average(pts: FeatureVector[]): FeatureVector {
+        let dims = pts[0].values.length;
+        let values = new Array(dims);
+        for (let i: number = 0; i < dims; i++)
+            values[i] = 0;
+
+        for (let p of pts) {
+            for (let i: number = 0; i < dims; i++)
+                values[i] += p.values[i];
+        }
+
+        for (let i: number = 0; i < values.length; i++) {
+            values[i] /= pts.length;
+        }
+
+        let tagDims = pts[0].tags.length;
+        let tagValues = new Array(tagDims);
+        for (let i: number = 0; i < tagDims; i++)
+            tagValues[i] = 0;
+
+
+        for (let p of pts) {
+            for (let i: number = 0; i < tagDims; i++)
+                tagValues[i] += p.tags[i];
+        }
+
+        for (let i: number = 0; i < tagValues.length; i++) {
+            tagValues[i] /= pts.length;
+        }
+
+        return new FeatureVector(values, tagValues);
+    }
+}
+
+class KMeans {
+
+    public currentIteration: number = 0;
+    public vectorsPerCluster: FeatureVector[][] = [];
+
+    public centroids: FeatureVector[] = [];
+    public currentDeltaDistanceDifference: number = 0;
+
+    constructor(protected points: FeatureVector[], public k: number, centroids: FeatureVector[] = null) {
+
+        if (centroids != null)
+            this.centroids = centroids;
+        else
+            this.initCentroids();
+    }
+
+    protected initCentroids() {
+        for (let i: number = 0; i < this.k; i++) {
+            this.centroids.push(this.points[Math.floor(this.points.length * Math.random())]);
+            this.vectorsPerCluster.push([]);
+        }
+    }
+
+
+    buildVectorsPerCluster() {
+        // clear category
+        for (let i: number = 0; i < this.k; i++) {
+            this.vectorsPerCluster[i] = [];
+        }
+
+        // calculate points per centroid
+        for (let p of this.points) {
+            let minDist = Number.MAX_VALUE;
+            let centroidIndex: number = -1;
+            for (let k: number = 0; k < this.k; k++) {
+                let dist = this.centroids[k].distanceTo(p);
+
+                if (dist < minDist) {
+                    centroidIndex = k;
+                    minDist = dist;
+                }
+            }
+
+            this.vectorsPerCluster[centroidIndex].push(p);
+        }
+    }
+
+    step() {
+        this.buildVectorsPerCluster();
+
+        let totalDistanceDiff = 0;
+        // adjust centroids
+        for (let k: number = 0; k < this.vectorsPerCluster.length; k++) {
+            let cat = this.vectorsPerCluster[k];
+            if (cat.length > 0) {
+                let avg = FeatureVector.average(cat);
+
+                let dist = this.centroids[k].distanceTo(avg);
+                totalDistanceDiff += dist;
+                this.centroids[k] = avg;
+            }
+        }
+        this.currentDeltaDistanceDifference = totalDistanceDiff;
+
+
+        this.currentIteration++;
+    }
+}
+
+
+class KMeansPlusPlus extends KMeans {
+    constructor(points: FeatureVector[], k: number, centroids: FeatureVector[] = null) {
+        super(points, k, centroids);
+    }
+
+    protected initCentroids() {
+        // add initial center
+        this.centroids.push(this.points[Math.floor(this.points.length * Math.random())]);
+
+        while (this.centroids.length < this.k) {
+            // determine distances of all points to its nearest centroid
+            let distances = new Array(this.points.length);
+            let maxDistance = 0;
+            for (let i: number = 0; i < this.points.length; i++) {
+                let minDist = Number.MAX_VALUE;
+
+                // determine distance to nearest centroid
+                for (let c of this.centroids) {
+                    let dist = this.points[i].distanceTo(c);
+                    if (minDist < dist)
+                        minDist = dist;
+                }
+                distances[i] = minDist;
+                if (minDist > maxDistance)
+                    maxDistance = minDist;
+            }
+            // normalize distances
+            for (let i: number = 0; i < distances.length; i++)
+                distances[i] /= maxDistance;
+
+            // select random center according to weighted distribution of dist*dist
+            let selectedIndex = this.random(this.points, idx => distances[idx] * distances[idx]);
+
+            this.centroids.push(this.points[selectedIndex]);
+
+            // repeat until there are k centroids
+        }
+
+    }
+
+    private random<T>(elements: T[], weightFunc: (index) => number): number {
+        let totalWeight = 0; // this stores sum of weights of all elements before current
+        let selected: number = -1;
+        for (let i: number = 0; i < elements.length; i++) {
+            let weight = weightFunc(i); // weight of current element
+            let r = Math.floor(Math.random() * (totalWeight + weight)); // random value
+            if (r >= totalWeight) // probability of this is weight/(totalWeight+weight)
+                selected = i; // it is the probability of discarding last selected element and selecting current one instead
+            totalWeight += weight; // increase weight sum
+        }
+
+        return selected; // when iterations end, selected is some element of sequence. 
+    }
+}
+
+
+class MeanShift {
+    public windowRadius: number = 50;
+    public mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius: number = 0.5;
+    public centroids: FeatureVector[];
+    public vectorsPerCluster: FeatureVector[][] = [];
+
+    public currentDeltaDistanceDifference: number = 0;
+    public currentIteration: number = 0;
+
+    public constructor(private points: FeatureVector[], centroids: FeatureVector[], windowRadius: number, mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius: number) {
+        this.centroids = centroids;
+        this.windowRadius = windowRadius;
+        this.mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius = mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius;
+    }
+
+    private calculateVectorsPerCluster() {
+        // clear category
+        this.vectorsPerCluster = [];
+        for (let i: number = 0; i < this.centroids.length; i++)
+            this.vectorsPerCluster.push([]);
+
+        // determine all points of all centroids within the window radius
+        for (let p of this.points) {
+            let minC: number = -1;
+            let minCDist: number = Number.MAX_VALUE;
+            for (let c: number = 0; c < this.centroids.length; c++) {
+                let dist = this.centroids[c].distanceTo(p);
+                if (dist < this.windowRadius && dist < minCDist) {
+                    minCDist = dist;
+                    minC = c;
+                }
+            }
+            if (minC != -1)
+                this.vectorsPerCluster[minC].push(p);
+        }
+    }
+
+    step() {
+        this.calculateVectorsPerCluster();
+
+        let totalDistanceDiff = 0;
+        // adjust centroids based on their new points
+        for (let c: number = 0; c < this.centroids.length; c++) {
+            let cat = this.vectorsPerCluster[c];
+            if (cat.length > 0) {
+                let avg = FeatureVector.average(cat);
+                let dist = this.centroids[c].distanceTo(avg);
+                totalDistanceDiff += dist;
+                this.centroids[c] = avg;
+            }
+
+        }
+        this.currentDeltaDistanceDifference = totalDistanceDiff;
+
+        // merge centroids that are close
+        let maxDistance = this.mergeWhenDistanceIsSmallerThanPercentageOfWindowRadius * this.windowRadius;
+
+        let merged: boolean[] = new Array(this.centroids.length);
+
+        let newCentroids: FeatureVector[] = [];
+        for (let c1: number = 0; c1 < this.centroids.length; c1++) {
+            let centroidsToMerge: FeatureVector[] = [];
+            // if not merged already
+            if (!merged[c1]) {
+
+                // check if there are other centroids close and add them to the list to merge
+                for (let c2: number = c1 + 1; c2 < this.centroids.length; c2++) {
+                    if (!merged[c2] && this.centroids[c1].distanceTo(this.centroids[c2]) < maxDistance) {
+                        centroidsToMerge.push(this.centroids[c2]);
+                        merged[c2] = true;
+                    }
+                }
+                // if there are centroids to merge with the current one
+                if (centroidsToMerge.length > 0) {
+                    // add the current one and take the average
+                    centroidsToMerge.push(this.centroids[c1]);
+                    merged[c1] = true;
+                    let newCentroid = FeatureVector.average(centroidsToMerge);
+                    newCentroids.push(newCentroid);
+                }
+                else {
+                    // no merging to be done, just take the centroid as is
+                    newCentroids.push(this.centroids[c1]);
+                }
+            }
+            else {
+                // the centroid is already merged
+            }
+        }
+        // take the merged centroids as new basis
+        this.centroids = newCentroids;
+
+        // update clusters
+        this.calculateVectorsPerCluster();
+
+        this.currentIteration++;
+    }
+
+}
+
+
+
+
+
+function rgbToHsv(r, g, b) {
+    r = r / 255, g = g / 255, b = b / 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, v = max;
+
+    var d = max - min;
+    s = max == 0 ? 0 : d / max;
+
+    if (max == min) {
+        h = 0; // achromatic
+    } else {
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+
+    return [h, s, v];
+}
+function hsvToRgb(h, s, v) {
+    var r, g, b;
+
+    var i = Math.floor(h * 6);
+    var f = h * 6 - i;
+    var p = v * (1 - s);
+    var q = v * (1 - f * s);
+    var t = v * (1 - (1 - f) * s);
+
+    switch (i % 6) {
+        case 0: r = v, g = t, b = p; break;
+        case 1: r = q, g = v, b = p; break;
+        case 2: r = p, g = v, b = t; break;
+        case 3: r = p, g = q, b = v; break;
+        case 4: r = t, g = p, b = v; break;
+        case 5: r = v, g = p, b = q; break;
+    }
+
+    return [r * 255, g * 255, b * 255];
+}
+
+function rgbToHsl(r, g, b) {
+    r /= 255, g /= 255, b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h, s, l = (max + min) / 2;
+
+    if (max == min) {
+        h = s = 0; // achromatic
+    } else {
+        var d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+
+    return [h, s, l];
+}
+
+function hslToRgb(h, s, l) {
+    var r, g, b;
+
+    if (s == 0) {
+        r = g = b = l; // achromatic
+    } else {
+        function hue2rgb(p, q, t) {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1 / 6) return p + (q - p) * 6 * t;
+            if (t < 1 / 2) return q;
+            if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+            return p;
+        }
+
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1 / 3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1 / 3);
+    }
+
+    return [r * 255, g * 255, b * 255];
+}
+
+
+
+
+
+var CLIPBOARD = new CLIPBOARD_CLASS("outputCanvas", true);
+function CLIPBOARD_CLASS(canvas_id, autoresize) {
+    var _self = this;
+    var canvas = <HTMLCanvasElement>document.getElementById(canvas_id);
+    var ctx = canvas.getContext("2d");
+    var ctrl_pressed = false;
+    var reading_dom = false;
+    var text_top = 15;
+    var pasteCatcher;
+    var paste_mode;
+
+    //handlers
+    document.addEventListener('keydown', function(e) {
+        _self.on_keyboard_action(e);
+    }, false); //firefox fix
+    document.addEventListener('keyup', function(e) {
+        _self.on_keyboardup_action(e);
+    }, false); //firefox fix
+    document.addEventListener('paste', function(e) {
+        _self.paste_auto(e);
+    }, false); //official paste handler
+
+    //constructor - prepare
+    this.init = function() {
+        //if using auto
+        if ((<any>window).Clipboard)
+            return;
+
+        pasteCatcher = document.createElement("div");
+        pasteCatcher.setAttribute("id", "paste_ff");
+        pasteCatcher.setAttribute("contenteditable", "");
+        pasteCatcher.style.cssText = 'opacity:0;position:fixed;top:0px;left:0px;';
+        pasteCatcher.style.marginLeft = "-20px";
+        pasteCatcher.style.width = "10px";
+        document.body.appendChild(pasteCatcher);
+        document.getElementById('paste_ff').addEventListener('DOMSubtreeModified', function() {
+            if (paste_mode == 'auto' || ctrl_pressed == false)
+                return true;
+            //if paste handle failed - capture pasted object manually
+            if (pasteCatcher.children.length == 1) {
+                if (pasteCatcher.firstElementChild.src != undefined) {
+                    //image
+                    _self.paste_createImage(pasteCatcher.firstElementChild.src);
+                }
+            }
+            //register cleanup after some time.
+            setTimeout(function() {
+                pasteCatcher.innerHTML = '';
+            }, 20);
+
+            return false;
+        }, false);
+    } ();
+    //default paste action
+    this.paste_auto = function(e) {
+        paste_mode = '';
+        pasteCatcher.innerHTML = '';
+        var plain_text_used = false;
+        if (e.clipboardData) {
+            var items = e.clipboardData.items;
+            if (items) {
+                paste_mode = 'auto';
+                //access data directly
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].type.indexOf("image") !== -1) {
+                        //image
+                        var blob = items[i].getAsFile();
+                        var URLObj = window.URL || (<any>window).webkitURL;
+                        var source = URLObj.createObjectURL(blob);
+                        this.paste_createImage(source);
+                    }
+                }
+                e.preventDefault();
+            }
+            else {
+                //wait for DOMSubtreeModified event
+                //https://bugzilla.mozilla.org/show_bug.cgi?id=891247
+            }
+        }
+    };
+    //on keyboard press - 
+    this.on_keyboard_action = function(event) {
+        let k = event.keyCode;
+        //ctrl
+        if (k == 17 || event.metaKey || event.ctrlKey) {
+            if (ctrl_pressed == false)
+                ctrl_pressed = true;
+        }
+        //c
+        if (k == 86) {
+            if (document.activeElement != undefined && (<any>document.activeElement).type == 'text') {
+                //let user paste into some input
+                return false;
+            }
+
+            if (ctrl_pressed == true && !(<any>window).Clipboard)
+                pasteCatcher.focus();
+        }
+        return false;
+    };
+    //on keybaord release
+    this.on_keyboardup_action = function(event) {
+        let k = event.keyCode;
+        //ctrl
+        if (k == 17 || event.metaKey || event.ctrlKey || event.key == 'Meta')
+            ctrl_pressed = false;
+    };
+    //draw image
+    this.paste_createImage = function(source) {
+        var pastedImage = <HTMLImageElement>$("#img").get(0);
+        pastedImage.onload = function() {
+            let img = pastedImage;
+            loadImage(img);
+
+
+
+        };
+        pastedImage.src = source;
+    };
+}
+
+
+namespace ImageOperations {
+    export function grayscale(w: number, h: number, src: Uint8Array): Uint8ClampedArray {
+        let idx = 0;
+        let dst = new Uint8ClampedArray(src);
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+
+                let avg = (src[idx] + src[idx + 1] + src[idx + 2]) / 3;
+
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+                dst[idx] = ~~Math.abs(avg);
+                idx++;
+
+                idx++;
+            }
+        }
+        return dst;
+    }
+
+    export function applyKernel(kernel: number[][], w: number, h: number, src: Uint8Array, nrOfChannels: number): Float32Array {
+        let idx = 0;
+        let dst = new Float32Array(src);
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+                for (let c: number = 0; c < 3; c++) {
+                    if (c < nrOfChannels) {
+                        let r = convolve(kernel, src, w, h, i, j, 0);
+                        dst[idx] = r;
+                    }
+                    else
+                        dst[idx] = 0;
+                    idx++;
+                }
+
+
+                idx++;
+            }
+        }
+        return dst;
+    }
+
+    export function treshold(treshold: number, valueToSetToIfAbove: number, w: number, h: number, src: Uint8ClampedArray): Uint8ClampedArray {
+        let idx = 0;
+        let dst = new Uint8ClampedArray(src);
+
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+
+                if (treshold > src[idx]) dst[idx] = valueToSetToIfAbove;
+                idx++;
+                if (treshold > src[idx]) dst[idx] = valueToSetToIfAbove;
+                idx++;
+                if (treshold > src[idx]) dst[idx] = valueToSetToIfAbove;
+                idx++;
+
+                idx++;
+            }
+        }
+
+        return dst;
+    }
+
+    export function normalize(w: number, h: number, src: Float32Array): Uint8ClampedArray {
+        let idx = 0;
+        let dst = new Uint8ClampedArray(src);
+
+        let maxR = 0;
+        let maxG = 0;
+        let maxB = 0;
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+
+
+
+                if (maxR < src[idx]) maxR = src[idx];
+                idx++;
+                if (maxG < src[idx]) maxG = src[idx];
+                idx++;
+                if (maxB < src[idx]) maxB = src[idx];
+                idx++;
+
+                idx++;
+            }
+        }
+
+        idx = 0;
+
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+                dst[idx] = Math.round(src[idx] / maxR * 255);
+                idx++;
+                dst[idx] = Math.round(src[idx] / maxG * 255);
+                idx++;
+                dst[idx] = Math.round(src[idx] / maxB * 255);
+                idx++;
+
+                idx++;
+            }
+        }
+
+
+        return dst;
+    }
+
+    export function applyCanny(Gx: number[][], Gy: number[][], src: Uint8Array, w: number, h: number, lowerTresh: number, upperTresh: number, nrOfChannels: number = 3) {
+        let idx = 0;
+        let mags = new Float32Array(src);
+        let angs = new Float32Array(src);
+
+        let dst = new Uint8ClampedArray(src);
+
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+
+                for (let channel: number = 0; channel < 3; channel++) {
+
+                    if (channel < nrOfChannels) {
+                        let r1 = convolve(Gx, src, w, h, i, j, channel);
+                        let r2 = convolve(Gy, src, w, h, i, j, channel);
+
+                        let gr = Math.sqrt(r1 * r1 + r2 * r2);
+
+                        let angr = Math.atan2(r2, r1);
+
+                        mags[idx] = gr;
+                        angs[idx] = angr;
+                    }
+                    idx++;
+
+                }
+
+                idx++;
+                //return;
+
+            }
+        }
+
+        // check 0,45,90 and 135° angles and only keep the edge pixels that 
+        // which magnitude is both higher than the TOOT
+        idx = 0;
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+
+                for (let channel: number = 0; channel < 3; channel++) {
+                    if (channel < nrOfChannels) {
+                        let r1 = convolve(Gx, src, w, h, i, j, channel);
+                        let r2 = convolve(Gy, src, w, h, i, j, channel);
+
+                        let gr = Math.sqrt(r1 * r1 + r2 * r2);
+
+                        let angr = Math.atan2(r2, r1);
+                        if (angr < 0) angr += Math.PI;
+
+                        let mag = mags[idx];
+                        if (angr >= 0 && angr <= Math.PI / 8 || angr > 7 * Math.PI / 8) {
+                            // horizontal
+                            let left = mags[(idx - 4)];
+                            let right = mags[(idx + 4)];
+                            if (mag > left && mag > right)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+
+                        } else if (angr > Math.PI / 8 && angr <= 3 * Math.PI / 8) {
+                            // 1st diagonal 
+                            let leftbottom = mags[(idx - 4 + w * 4)];
+                            let righttop = mags[(idx + 4 - w * 4)];
+                            if (mag > leftbottom && mag > righttop)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        else if (angr > 3 * Math.PI / 8 && angr <= 5 * Math.PI / 8) {
+                            // vertical
+                            let top = mags[(idx - w * 4)];
+                            let bottom = mags[(idx + w * 4)];
+                            if (mag > top && mag > bottom)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+                        else if (angr > 5 * Math.PI / 8 && angr <= 7 * Math.PI / 8) {
+                            // 2nd diagonal 
+                            let lefttop = mags[(idx - 4 - w * 4)];
+                            let rightbottom = mags[(idx + 4 + w * 4)];
+                            if (mag > lefttop && mag > rightbottom)
+                                dst[idx] = 255;
+                            else
+                                dst[idx] = 0;
+                        }
+
+                        if (dst[idx] == 255) {
+                            if (gr > upperTresh)
+                                dst[idx] = 255;
+                            else if (gr >= lowerTresh && gr < upperTresh)
+                                dst[idx] = 128;
+                            else
+                                dst[idx] = 0;
+                        }
+                    }
+                    idx++;
+
+                }
+
+                idx++;
+                //return;
+            }
+        }
+
+        idx = 0;
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+
+                for (let channel: number = 0; channel < 3; channel++) {
+                    if (channel < nrOfChannels) {
+                        if (dst[idx] == 128) {
+                            let connectedToStrongEdge = false;
+                            for (let l: number = (j == 0) ? 0 : -1; l < ((j == h - 1) ? 0 : 1) && !connectedToStrongEdge; l++) {
+                                for (let k: number = (i == 0) ? 0 : -1; k < ((i == w - 1) ? 0 : 1) && !connectedToStrongEdge; k++) {
+                                    if (dst[idx + k * 4 + l * w * 4] == 255) {
+                                        // connected to strong edge
+                                        dst[idx] = 255;
+                                        connectedToStrongEdge = true
+                                    }
+                                }
+                            }
+
+                            if (!connectedToStrongEdge)
+                                dst[idx] = 0;
+                        }
+                    }
+
+                    idx++;
+                }
+
+            }
+        }
+        return dst;
+    }
+
+
+    export function convolve(kernel: number[][], data: Uint8ClampedArray, imgWidth: number, imgHeight: number, x: number, y: number, channel: number) {
+
+        let sum = 0;
+        for (let j: number = 0; j < kernel.length; j++) {
+            let row = kernel[j];
+
+            let l = y - j - Math.floor(kernel.length / 2);
+            if (l < 0) l = 0;
+            if (l >= imgHeight) l = imgHeight - 1;
+            for (let i: number = 0; i < row.length; i++) {
+                let k = x + i - Math.floor(row.length / 2);
+
+                if (k < 0) k = 0;
+                if (k >= imgWidth) k = imgWidth - 1;
+
+
+                let val = data[(l * imgWidth + k) * 4 + channel] * kernel[j][i];
+                sum += val;
+
+            }
+        }
+        return sum;
+    }
+
+    export function createKernel(w: number, h: number, defaultValue: number): number[][] {
+        let arr = [];
+        for (let j: number = 0; j < h; j++) {
+            let row = [];
+            arr.push(row);
+            for (let i: number = 0; i < w; i++) {
+                row.push(defaultValue);
+            }
+        }
+        return arr;
+    }
+
+    export function createSobelX(): number[][] {
+        return [
+            [-1, 0, 1],
+            [-2, 0, 2],
+            [-1, 0, 1]
+        ];
+    }
+
+    export function transpose(kernel: number[][]): number[][] {
+        let newKernel: number[][] = [];
+        for (let j: number = 0; j < kernel.length; j++) {
+            newKernel.push([]);
+            for (let i: number = 0; i < kernel[j].length; i++) {
+                newKernel[j][i] = kernel[i][j];
+            }
+        }
+        return newKernel;
+    }
+
+    export function createGaussian(w: number, h: number, sigma: number): number[][] {
+
+        let cx = 0
+        let cy = 0;
+
+        let sum = 0;
+        let arr = [];
+        for (let j: number = 0; j < h; j++) {
+            let row = [];
+            arr.push(row);
+            for (let i: number = 0; i < w; i++) {
+
+                let x = i - Math.floor(w / 2);
+                let y = j - Math.floor(h / 2);
+
+
+                let val = Math.exp(-(x - cx) * (x - cx) / (2 * sigma * sigma) -
+                    (y - cy) * (y - cy) / (2 * sigma * sigma));
+                sum += val;
+                row.push(val);
+            }
+        }
+
+        for (let j: number = 0; j < h; j++) {
+            for (let i: number = 0; i < w; i++) {
+                arr[j][i] /= sum;
+            }
+        }
+        return arr;
+    }
+
+    export function printKernel(kernel: number[][]) {
+        let str = "";
+        for (let j: number = 0; j < kernel.length; j++) {
+            let row = kernel[j];
+
+            for (let i: number = 0; i < row.length; i++) {
+                str += row[i].toFixed(2) + " ";
+            }
+            str += "<br/>";
+        }
+        console.log(str);
+    }
+
+}
+
+
+$(document).ready(function() {
+
+    $("#btnGo").click(function() {
+        main();
+    });
+});
+
+</script>
+</body>
+
+</html>
